@@ -1,5 +1,5 @@
 from datetime import datetime, timedelta
-
+import structlog
 from fastapi import APIRouter, Depends
 from geopy.geocoders import Nominatim
 from starlette.responses import Response
@@ -14,7 +14,7 @@ from app.model.weather_forecast_do import WeatherForecastDO
 router = APIRouter()
 models.Base.metadata.create_all(bind=engine)
 
-
+logger_structlog = structlog.getLogger()
 # Dependency
 def get_db():
     db = SessionLocal()
@@ -39,9 +39,10 @@ async def get_weather_daily(city: str, db: Session = Depends(get_db)):
 
     if location is None:
         return Response("Bad Request", status_code=400)
-
+        logger_structlog.exception(message="The city entered is invalid")
     # calling external api tomorrow.io
     response = get_tomorrow_weather(location.latitude, location.longitude)
+    logger_structlog.msg("get_tomorrow_weather API call successfully made")
     output = response.json()
     weatherdict = {"place": city.upper(), "forecastdate": output["data"]["timelines"][0]["intervals"][0]["startTime"],
                    "humidity": output["data"]["timelines"][0]["intervals"][1]["values"]["humidity"],
@@ -49,14 +50,16 @@ async def get_weather_daily(city: str, db: Session = Depends(get_db)):
                    "windSpeed": output["data"]["timelines"][0]["intervals"][1]["values"]["windSpeed"],
                    "weatherCodeFullDay": output["data"]["timelines"][0]["intervals"][1]["values"]["weatherCodeFullDay"]}
     # check if the data already exist else create a new entry
+    logger_structlog.msg("DB call to check if weather entry for current city exists", current_city=city)
     forecastdata = crud.get_current_weather_data(db, weatherdict["forecastdate"], city.upper())
     if len(forecastdata) == 0:
+        logger_structlog.msg("DB call to create weather entry for city", current_city=city)
         crud.create_current_weather_data(db, weatherdict)
 
     weather_code = str(weatherdict["weatherCodeFullDay"])
     weatherdict["Description"] = weather_mapper(weather_code)
     response_json = pydantic_model(weatherdict)
-
+    logger_structlog.msg(response_json)
     return response_json
 
 
@@ -81,6 +84,7 @@ async def get_weather_forecast(city: str, db: Session = Depends(get_db)):
 
     if location is None:
         return Response("Bad Request", status_code=400)
+        logger_structlog.exception(message="The city entered is invalid")
     # calling external api tomorrow.io
     response = get_tomorrow_weather(location.latitude, location.longitude)
     output = response.json()
@@ -112,3 +116,4 @@ async def get_weather_history(city: str, db: Session = Depends(get_db)):
             return "warmer"
         else:
             return "colder"
+    logger_structlog.msg("There are no data history to compare ")
